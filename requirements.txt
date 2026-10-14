@@ -1,0 +1,8 @@
+edge-tts
+feedparser
+requests
+trafilatura
+lxml_html_clean
+googlenewsdecoder
+selectolax<1.0
+imageio-ffmpeg

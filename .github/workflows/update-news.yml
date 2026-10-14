@@ -1,0 +1,42 @@
+name: Atualizar notícias
+
+on:
+  schedule:
+    - cron: "0 9 * * *"   # todos os dias às 09:00 UTC (06:00 de Brasília)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: atualizar-noticias
+  cancel-in-progress: false
+
+jobs:
+  atualizar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Buscar, resumir e narrar as notícias
+        run: python scripts/gerar.py
+
+      - name: Publicar alterações
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add noticias.json resumo.mp3 resumo.txt audio
+          if git diff --cached --quiet; then
+            echo "Sem alterações."
+          else
+            git commit -m "chore: notícias de $(date -u +%Y-%m-%d)"
+            git push
+          fi
