@@ -55,6 +55,8 @@ export default {
       return rapido(n, cors);
     }
 
+    if (pathname === "/fala") return fala(request, cors);
+
     if (pathname === "/ultimo") return ultimo(env, cors);
     if (pathname !== "/atualizar") {
       return json({ ok: false, erro: "rota desconhecida" }, 404, cors);
@@ -191,6 +193,131 @@ function resumir(texto) {
   }
   out = (out || texto).trim();
   return out.length > 400 ? out.slice(0, 400).replace(/\s\S*$/, "") + "…" : out;
+}
+
+/* --------------------------- voz neural (edge-tts) --------------------------- */
+
+const TTS_TOKEN = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
+const TTS_VOICE = "pt-BR-ThalitaMultilingualNeural";
+const TTS_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+
+async function fala(request, cors) {
+  let texto = "";
+  try {
+    if (request.method === "POST") {
+      const j = await request.json();
+      texto = j && j.text ? String(j.text) : "";
+    } else {
+      texto = new URL(request.url).searchParams.get("text") || "";
+    }
+  } catch (e) { /* ignora */ }
+  texto = texto.replace(/\s+/g, " ").trim().slice(0, 3000);
+  if (!texto) return json({ ok: false, erro: "texto vazio" }, 400, cors);
+
+  try {
+    const audio = await edgeTts(texto);
+    if (!audio || audio.length < 200) return json({ ok: false, erro: "sem audio" }, 502, cors);
+    return new Response(audio, {
+      status: 200,
+      headers: { ...cors, "Content-Type": "audio/mpeg", "Cache-Control": "no-store" },
+    });
+  } catch (e) {
+    return json({ ok: false, erro: "tts falhou", detalhe: String(e).slice(0, 200) }, 502, cors);
+  }
+}
+
+async function edgeTts(texto) {
+  const WIN_EPOCH = 11644473600;
+  let ticks = Date.now() / 1000 + WIN_EPOCH;
+  ticks -= ticks % 300;
+  const strToHash = (ticks * 1e7).toFixed(0) + TTS_TOKEN;
+  const gec = await sha256Upper(strToHash);
+  const conn = crypto.randomUUID().replace(/-/g, "");
+  const url =
+    `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1` +
+    `?TrustedClientToken=${TTS_TOKEN}&Sec-MS-GEC=${gec}` +
+    `&Sec-MS-GEC-Version=1-130.0.2849.68&ConnectionId=${conn}`;
+
+  const ws = new WebSocket(url);
+  const chunks = [];
+  const ts = edgeTimestamp();
+
+  await new Promise((resolve, reject) => {
+    const to = setTimeout(() => reject(new Error("timeout")), 20000);
+    ws.addEventListener("open", () => {
+      const cfg = {
+        context: {
+          synthesis: {
+            audio: {
+              metadataoptions: { sentenceBoundaryEnabled: false, wordBoundaryEnabled: false },
+              outputFormat: TTS_FORMAT,
+            },
+          },
+        },
+      };
+      ws.send(
+        `X-Timestamp:${ts}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n${JSON.stringify(cfg)}`
+      );
+      const ssml =
+        `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='pt-BR'>` +
+        `<voice name='${TTS_VOICE}'><prosody pitch='-2Hz' rate='+6%' volume='+0%'>` +
+        `${escapeXml(texto)}</prosody></voice></speak>`;
+      ws.send(
+        `X-RequestId:${crypto.randomUUID().replace(/-/g, "")}\r\nContent-Type:application/ssml+xml\r\n` +
+          `X-Timestamp:${ts}\r\nPath:ssml\r\n\r\n${ssml}`
+      );
+    });
+    ws.addEventListener("message", (ev) => {
+      const d = ev.data;
+      if (typeof d === "string") {
+        if (d.includes("Path:turn.end")) {
+          clearTimeout(to);
+          try { ws.close(); } catch (e) { /* ignore */ }
+          resolve();
+        }
+        return;
+      }
+      const u8 = new Uint8Array(d);
+      if (u8.length < 3) return;
+      const headerLen = (u8[0] << 8) | u8[1];
+      const start = 2 + headerLen;
+      if (start >= u8.length) return;
+      const header = new TextDecoder().decode(u8.slice(2, start));
+      if (header.includes("Path:audio")) chunks.push(u8.slice(start));
+    });
+    ws.addEventListener("error", () => { clearTimeout(to); reject(new Error("ws error")); });
+    ws.addEventListener("close", () => { clearTimeout(to); resolve(); });
+  });
+
+  let total = 0;
+  for (const c of chunks) total += c.length;
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) { out.set(c, off); off += c.length; }
+  return out;
+}
+
+async function sha256Upper(str) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+}
+
+function edgeTimestamp() {
+  const d = new Date();
+  const dias = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const meses = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const p = (n) => String(n).padStart(2, "0");
+  return `${dias[d.getUTCDay()]} ${meses[d.getUTCMonth()]} ${p(d.getUTCDate())} ${d.getUTCFullYear()} ` +
+    `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())} GMT+0000 (Coordinated Universal Time)`;
+}
+
+function escapeXml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
 }
 
 /* --------------------------- rotas com token (opcional) --------------------------- */
