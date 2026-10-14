@@ -9,5 +9,5 @@
  *   window.CENTRAL_CONFIG = { workerUrl: "https://central-noticias.eu.workers.dev" };
  */
 window.CENTRAL_CONFIG = {
-  workerUrl: "",
+  workerUrl: "https://central-de-noticias.bertinmarquez84.workers.dev",
 };
