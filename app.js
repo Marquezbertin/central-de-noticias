@@ -340,21 +340,22 @@ async function carregar() {
     state.geradoEm = dados.geradoEm || "";
     state.versao = dados.geradoEm ? "?v=" + encodeURIComponent(dados.geradoEm) : "";
 
-    boletim.src = audioDia + state.versao;
-    $("#b-download").href = audioDia + state.versao;
+      boletim.src = audioDia + state.versao;
+      $("#b-download").href = audioDia + state.versao;
+      $("#b-play").disabled = false;
 
-    renderStats();
-    renderTabs();
-    render();
+      renderStats();
+      renderTabs();
+      render();
 
-    if (dados.geradoEm) $("#generated").textContent = dataGerado(dados.geradoEm);
-    $("#updated").textContent = dataGerado(dados.geradoEm) || "";
-    $("#status").textContent = `${itens.length} notícias de ${new Set(itens.map((i) => i.source)).size} fontes.`;
+      if (dados.geradoEm) $("#generated").textContent = dataGerado(dados.geradoEm);
+      $("#updated").textContent = dataGerado(dados.geradoEm) || "";
+      $("#status").textContent = `${itens.length} not��cias de ${new Set(itens.map((i) => i.source)).size} fontes.`;
 
-    if (!boletim.duration) {
-      // aguarda metadados
-      boletim.load();
-    }
+      if (!boletim.duration) {
+        // aguarda metadados
+        boletim.load();
+      }
   } catch (e) {
     $("#news").innerHTML = "";
     const d = el("div", "empty");
