@@ -19,7 +19,7 @@ const TTS_RATE = "+6%";
 const TTS_PITCH = "-2Hz";
 const TTS_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
 const TTS_OUTPUT = `${TTS_FORMAT}`;
-const PAUSA_ENTRE_ITENS = "2s";
+const PAUSA_SEGUNDOS = 2;
 
 const EDGE_TOKEN = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
 const EDGE_VERSION = "143.0.3650.75";
@@ -205,7 +205,7 @@ async function fala(request, cors) {
   } catch (e) { /* ignora */ }
   texto = texto.replace(/\s+/g, " ").trim().slice(0, 1200);
   if (!texto) return json({ ok: false, erro: "texto vazio" }, 400, cors);
-  return responderAudio([escapeXml(texto)], cors);
+  return responderAudio([texto], cors);
 }
 
 async function boletim(request, cors) {
@@ -220,8 +220,8 @@ async function boletim(request, cors) {
 
   const segmentos = itens
     .map((it) => {
-      const t = escapeXml(String(it.title || "").trim());
-      const s = it.summary ? escapeXml(String(it.summary).trim()) : "";
+      const t = String(it.title || "").trim();
+      const s = it.summary ? String(it.summary).trim() : "";
       return (t + (s ? ". " + s : "")).trim();
     })
     .filter((s) => s.length > 0);
@@ -243,42 +243,65 @@ async function responderAudio(segmentos, cors) {
   }
 }
 
-const enc = new TextEncoder();
-
 function escapeXml(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-function montarSsml(corpo) {
-  const ssml =
+function montarSsml(texto) {
+  return (
     `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='pt-BR'>` +
     `<voice name='${TTS_VOICE}'>` +
-    `<prosody pitch='${TTS_PITCH}' rate='${TTS_RATE}' volume='+0%'>${corpo}</prosody>` +
-    `</voice></speak>`;
-  return ssml;
+    `<prosody pitch='${TTS_PITCH}' rate='${TTS_RATE}' volume='+0%'>${escapeXml(texto)}</prosody>` +
+    `</voice></speak>`
+  );
+}
+
+// Um trecho de silencio em MP3 (24 kHz, 48 kbps, mono) para separar as noticias.
+let _silencio = null;
+function silencioMp3(segundos) {
+  if (_silencio && _silencio.segundos === segundos) return _silencio.bytes;
+  const frame = new Uint8Array(144);
+  frame[0] = 0xff; frame[1] = 0xf3; frame[2] = 0x64; frame[3] = 0xc0;
+  const n = Math.round(segundos / (576 / 24000));
+  const out = new Uint8Array(n * 144);
+  for (let i = 0; i < n; i++) out.set(frame, i * 144);
+  _silencio = { segundos, bytes: out };
+  return out;
+}
+
+async function comLimite(itens, limite, fn) {
+  const res = new Array(itens.length);
+  let i = 0;
+  const trabalhadores = Array.from({ length: Math.min(limite, itens.length) }, async () => {
+    while (i < itens.length) {
+      const idx = i++;
+      try { res[idx] = await fn(itens[idx], idx); } catch (e) { res[idx] = null; }
+    }
+  });
+  await Promise.all(trabalhadores);
+  return res;
 }
 
 async function edgeTts(segmentos) {
-  // agrupa os itens em blocos para nao estourar o limite de texto por conexao
-  const blocos = [];
-  let atual = "";
-  segmentos.forEach((seg, i) => {
-    const trecho = seg + `<break time='${PAUSA_ENTRE_ITENS}'/>`;
-    if (atual && enc.encode(atual + trecho).length > 3400) { blocos.push(atual); atual = ""; }
-    atual += trecho;
-  });
-  if (atual) blocos.push(atual);
+  const limpos = segmentos.map((s) => String(s).trim()).filter(Boolean);
+  if (!limpos.length) throw new Error("sem texto");
 
-  const pedacos = [];
-  for (const corpo of blocos) {
-    const audio = await edgeTtsUma(montarSsml(corpo));
-    pedacos.push(new Uint8Array(audio));
+  const audios = await comLimite(limpos, 4, (seg) => edgeTtsUma(montarSsml(seg)));
+
+  const silent = silencioMp3(PAUSA_SEGUNDOS);
+  const partes = [];
+  for (const a of audios) {
+    if (!a || a.length < 100) continue;
+    if (partes.length) partes.push(silent);
+    partes.push(new Uint8Array(a));
   }
+  if (!partes.length) throw new Error("nenhum audio gerado");
+
   let total = 0;
-  for (const p of pedacos) total += p.length;
+  for (const p of partes) total += p.length;
   const out = new Uint8Array(total);
   let off = 0;
-  for (const p of pedacos) { out.set(p, off); off += p.length; }
+  for (const p of partes) { out.set(p, off); off += p.length; }
   return out;
 }
 
