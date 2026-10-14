@@ -309,11 +309,13 @@ async function edgeTtsUma(ssml) {
   ws.accept();
 
   const chunks = [];
+  const textos = [];
   await new Promise((resolve, reject) => {
     const to = setTimeout(() => reject(new Error("timeout")), 30000);
     ws.addEventListener("message", (ev) => {
       const d = ev.data;
       if (typeof d === "string") {
+        textos.push(d.slice(0, 120).replace(/\r\n/g, " "));
         if (d.includes("Path:turn.end")) {
           clearTimeout(to);
           try { ws.close(); } catch (e) { /* ignore */ }
@@ -335,8 +337,8 @@ async function edgeTtsUma(ssml) {
     const cfg =
       `X-Timestamp:${edgeDate()}\r\nContent-Type:application/json; charset=utf-8\r\n` +
       `Path:speech.config\r\n\r\n` +
-      `{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},` +
-      `"outputFormat":"${TTS_OUTPUT}"}}}}`;
+      `{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"true","wordBoundaryEnabled":"false"},` +
+      `"outputFormat":"${TTS_OUTPUT}"}}}}\r\n`;
     ws.send(cfg);
     ws.send(
       `X-RequestId:${crypto.randomUUID().replace(/-/g, "")}\r\nContent-Type:application/ssml+xml\r\n` +
@@ -346,6 +348,7 @@ async function edgeTtsUma(ssml) {
 
   let total = 0;
   for (const c of chunks) total += c.length;
+  if (total === 0) throw new Error("sem audio; msgs=[" + textos.join(" || ").slice(0, 400) + "]");
   const out = new Uint8Array(total);
   let off = 0;
   for (const c of chunks) { out.set(c, off); off += c.length; }
