@@ -14,7 +14,11 @@ const state = {
   busca: "",
   tocandoIdx: -1,
   fallbackUtter: null,
+  geradoEm: "",
+  versao: "",
 };
+
+const WORKER = ((window.CENTRAL_CONFIG && window.CENTRAL_CONFIG.workerUrl) || "").replace(/\/+$/, "");
 
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, txt) => {
@@ -189,7 +193,7 @@ function tocarItem(idx, btn) {
   btn.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg> Tocando';
 
   if (it.audio) {
-    itemAudio.src = it.audio;
+    itemAudio.src = it.audio + state.versao;
     itemAudio.playbackRate = Number($("#b-rate").value) || 1;
     itemAudio.play().catch(() => falarTexto(`${it.title}. ${it.summary || ""}`));
   } else {
@@ -331,8 +335,11 @@ async function carregar() {
     state.itens = itens;
     state.categorias = categorias.length ? categorias : [...new Set(itens.map((i) => i.cat))];
 
-    boletim.src = audioDia;
-    $("#b-download").href = audioDia;
+    state.geradoEm = dados.geradoEm || "";
+    state.versao = dados.geradoEm ? "?v=" + encodeURIComponent(dados.geradoEm) : "";
+
+    boletim.src = audioDia + state.versao;
+    $("#b-download").href = audioDia + state.versao;
 
     renderStats();
     renderTabs();
@@ -366,6 +373,69 @@ $("#q").addEventListener("input", (e) => {
 });
 
 $("#refresh").addEventListener("click", carregar);
+
+/* ---------------------- atualizar agora (botão) ---------------------- */
+
+const btnForcar = $("#forcar");
+if (WORKER && btnForcar) {
+  btnForcar.hidden = false;
+  btnForcar.addEventListener("click", atualizarAgora);
+}
+
+async function atualizarAgora() {
+  const btn = $("#forcar");
+  btn.disabled = true;
+  const antes = state.geradoEm;
+  $("#status").textContent = "Pedindo atualização…";
+  try {
+    const r = await fetch(WORKER + "/atualizar", { method: "POST" });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) {
+      if (r.status === 429) {
+        const s = Number(j.faltam) || 60;
+        $("#status").textContent = `Aguarde ~${Math.ceil(s / 60)} min para atualizar de novo.`;
+      } else {
+        $("#status").textContent = "Não foi possível pedir a atualização agora.";
+      }
+      btn.disabled = false;
+      return;
+    }
+  } catch (e) {
+    $("#status").textContent = "Falha de conexão ao pedir a atualização.";
+    btn.disabled = false;
+    return;
+  }
+  esperarAtualizacao(antes, btn);
+}
+
+async function esperarAtualizacao(antes, btn) {
+  const inicio = Date.now();
+  const limite = inicio + 12 * 60 * 1000; // até 12 min
+  const tick = async () => {
+    const seg = Math.round((Date.now() - inicio) / 1000);
+    $("#status").textContent = `Buscando notícias novas… (${seg}s)`;
+    try {
+      const res = await fetch("noticias.json?t=" + Date.now(), { cache: "no-store" });
+      const dados = await res.json();
+      if (dados.geradoEm && dados.geradoEm !== antes) {
+        await carregar();
+        $("#status").textContent = "Prontas! Tocando o boletim…";
+        btn.disabled = false;
+        boletim.play().catch(() => {
+          $("#status").textContent = "Notícias atualizadas. Toque em ▶ para ouvir.";
+        });
+        return;
+      }
+    } catch (e) { /* tenta de novo */ }
+    if (Date.now() > limite) {
+      $("#status").textContent = "A atualização está demorando; tente novamente em instantes.";
+      btn.disabled = false;
+      return;
+    }
+    setTimeout(tick, 20000);
+  };
+  tick();
+}
 
 /* ------------------------------ init ------------------------------ */
 

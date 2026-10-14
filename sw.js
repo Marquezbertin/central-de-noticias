@@ -1,10 +1,11 @@
 /* Service Worker — Central de Notícias (PWA) */
-const CACHE = "noticias-v1";
+const CACHE = "noticias-v2";
 const SHELL = [
   "./",
   "./index.html",
   "./styles.css",
   "./app.js",
+  "./config.js",
   "./manifest.webmanifest",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
@@ -34,7 +35,7 @@ self.addEventListener("fetch", (e) => {
   if (url.pathname.endsWith(".mp3")) return;
 
   // Dados do dia: rede primeiro, cache como reserva
-  if (url.pathname.endsWith("noticias.json")) {
+  if (url.pathname.endsWith("noticias.json") || url.pathname.endsWith("config.js")) {
     e.respondWith(
       fetch(req)
         .then((res) => {

@@ -80,6 +80,13 @@ a { color: inherit; }
   padding: 6px 12px; border-radius: 999px; font-size: 12.5px; font-weight: 600; font-family: inherit;
 }
 .install:hover { border-color: var(--red); }
+.forcar {
+  width: auto; height: auto; padding: 6px 12px; gap: 6px; border-radius: 999px;
+  display: inline-flex; align-items: center; font-size: 12.5px; font-weight: 600; color: var(--red);
+  border-color: var(--red);
+}
+.forcar span { white-space: nowrap; }
+.forcar[disabled] { opacity: .55; cursor: default; }
 
 /* ---------------- hero ---------------- */
 main { padding: 26px 0 50px; }
@@ -239,6 +246,8 @@ main { padding: 26px 0 50px; }
 @media (max-width: 560px) {
   .topmeta .today { display: none; }
   .install span { display: none; }
+  .forcar span { display: none; }
+  .forcar { padding: 6px; }
   .stats { gap: 18px; }
   .stats strong { font-size: 22px; }
   .news { grid-template-columns: 1fr; }

@@ -59,9 +59,11 @@ Os resumos são extrativos (trechos reais das matérias). Todo o conteúdo e os 
 index.html                          Página da central
 styles.css                          Estilo
 app.js                              Player de áudio, busca, filtros, cards e PWA
+config.js                           URL do Worker (botão "Atualizar agora")
 sw.js                               Service Worker (PWA, cache offline do app)
 manifest.webmanifest                Manifesto do PWA (instalação no celular)
 icons/                              Ícones do app (192, 512, maskable, Apple)
+worker/                             Cloudflare Worker que aciona a atualização sob demanda
 noticias.json                       Notícias + resumos + links do dia (gerado)
 resumo.mp3                          Boletim falado completo do dia (gerado)
 resumo.txt                          Roteiro do boletim (gerado)
@@ -80,6 +82,16 @@ O workflow executa `scripts/gerar.py` todos os dias às **06:00 (horário de Bra
 gera `noticias.json`, o boletim `resumo.mp3`, os áudios por matéria e publica tudo.
 
 Para rodar manualmente: **Actions → Atualizar notícias → Run workflow**.
+
+### Botão "Atualizar agora" (buscar notícias novas na hora)
+
+Além da atualização diária, dá para ter um botão no site que **busca notícias novas na hora**.
+Como o site é estático, ele usa um pequeno **Cloudflare Worker** (grátis) como "porteiro": o botão
+chama o Worker, que aciona o workflow do GitHub de forma segura (o token fica no Worker, nunca no site).
+Quando fica pronto (~4–6 min), o site recarrega e já toca o boletim novo.
+
+Passo a passo completo em [`worker/README.md`](worker/README.md). Depois de criar o Worker, coloque a
+URL dele em [`config.js`](config.js). Sem essa URL, o botão fica escondido.
 
 ### Limpeza mensal do histórico
 
