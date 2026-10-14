@@ -1,18 +1,13 @@
 /**
  * Cloudflare Worker — Central de Notícias.
  *
- * Rota principal (não precisa de token):
- *   GET /rapido  -> busca as notícias mais recentes nos feeds RSS agora
- *                   e devolve JSON { atualizadoEm, itens:[{title,summary,source,cat,link}] }
- *
- * Rotas opcionais (só funcionam se as variáveis/token estiverem certos):
- *   POST /atualizar -> dispara o workflow do GitHub
- *   GET  /ultimo     -> último commit da branch main
+ *   GET  /rapido  -> busca as notícias mais recentes nos feeds RSS agora
+ *   POST /fala    -> gera áudio (voz em português) do texto enviado
+ *   POST /atualizar, GET /ultimo -> opcionais (precisam do token GH_TOKEN)
  *
  * Variáveis de ambiente (opcionais):
- *   GH_TOKEN        (secret)  token com permissão "Actions: Read and write"
- *   OWNER, REPO, WORKFLOW      (text)  ex.: Marquezbertin / central-de-noticias / update-news.yml
- *   ALLOWED_ORIGIN  (text)    ex.: https://marquezbertin.github.io
+ *   GH_TOKEN, OWNER, REPO, WORKFLOW   (para o disparo do workflow)
+ *   ALLOWED_ORIGIN  ex.: https://marquezbertin.github.io
  */
 
 const MIN_INTERVAL = 240; // segundos mínimos entre dois disparos
@@ -168,38 +163,47 @@ function attr(block, nome, atributo) {
   return m ? m[1] : "";
 }
 
+const ENTIDADES = {
+  aacute: "á", agrave: "à", acirc: "â", atilde: "ã", auml: "ä", aring: "å", aelig: "æ",
+  eacute: "é", egrave: "è", ecirc: "ê", euml: "ë",
+  iacute: "í", igrave: "ì", icirc: "î", iuml: "ï",
+  oacute: "ó", ograve: "ò", ocirc: "ô", otilde: "õ", ouml: "ö", oslash: "ø",
+  uacute: "ú", ugrave: "ù", ucirc: "û", uuml: "ü",
+  ccedil: "ç", ntilde: "ñ", yacute: "ý", aacute_: "á",
+  Aacute: "Á", Agrave: "À", Acirc: "Â", Atilde: "Ã", Auml: "Ä",
+  Eacute: "É", Egrave: "È", Ecirc: "Ê", Euml: "Ë",
+  Iacute: "Í", Icirc: "Î", Iuml: "Ï",
+  Oacute: "Ó", Ograve: "Ò", Ocirc: "Ô", Otilde: "Õ", Ouml: "Ö",
+  Uacute: "Ú", Ucirc: "Û", Uuml: "Ü", Ccedil: "Ç", Ntilde: "Ñ",
+  nbsp: " ", ordm: "º", ordf: "ª", deg: "°", middot: "·", hellip: "…",
+  ldquo: "“", rdquo: "”", lsquo: "‘", rsquo: "’", laquo: "«", raquo: "»",
+  ndash: "–", mdash: "—", copy: "©", reg: "®", trade: "™", euro: "€", pound: "£",
+  times: "×", divide: "÷", sup2: "²", sup3: "³", frac12: "½", amp: "&", lt: "<", gt: ">", quot: '"', apos: "'",
+};
+
 function limpar(s) {
   if (!s) return "";
   let t = s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").replace(/<[^>]+>/g, " ");
-  t = t
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;|&apos;/g, "'")
-    .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)));
+  t = t.replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)));
+  t = t.replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d)));
+  t = t.replace(/&([a-zA-Z]+);/g, (m, n) => (ENTIDADES[n] != null ? ENTIDADES[n] : m));
   return t.replace(/\s+/g, " ").trim();
 }
 
 function resumir(texto) {
   if (!texto) return "";
-  const frases = texto.match(/[^.!?]+[.!?]+/g) || [texto];
+  let s = texto.replace(/The post .*? appeared first on .*?\.?/i, "").trim();
+  const frases = s.match(/[^.!?]+[.!?]+/g) || [s];
   let out = "";
   for (const f of frases) {
     if ((out + f).length > 360) break;
     out += f;
   }
-  out = (out || texto).trim();
+  out = (out || s).trim();
   return out.length > 400 ? out.slice(0, 400).replace(/\s\S*$/, "") + "…" : out;
 }
 
-/* --------------------------- voz neural (edge-tts) --------------------------- */
-
-const TTS_TOKEN = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
-const TTS_VOICE = "pt-BR-ThalitaMultilingualNeural";
-const TTS_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+/* --------------------------- voz (Google TTS) --------------------------- */
 
 async function fala(request, cors) {
   let texto = "";
@@ -220,7 +224,7 @@ async function fala(request, cors) {
   if (!texto) return json({ ok: false, erro: "texto vazio" }, 400, cors);
 
   try {
-    const audio = await edgeTts(texto);
+    const audio = await googleTts(texto);
     if (!audio || audio.length < 200) return json({ ok: false, erro: "sem audio" }, 502, cors);
     return new Response(audio, {
       status: 200,
@@ -231,110 +235,45 @@ async function fala(request, cors) {
   }
 }
 
-async function edgeTts(texto) {
-  const WIN_EPOCH = 11644473600;
-  let ticks = Date.now() / 1000 + WIN_EPOCH;
-  ticks -= ticks % 300;
-  const strToHash = (ticks * 1e7).toFixed(0) + TTS_TOKEN;
-  const gec = await sha256Upper(strToHash);
-  const conn = crypto.randomUUID().replace(/-/g, "");
-  const url =
-    `https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1` +
-    `?TrustedClientToken=${TTS_TOKEN}&Sec-MS-GEC=${gec}` +
-    `&Sec-MS-GEC-Version=1-130.0.2849.68&ConnectionId=${conn}`;
-
-  const resp = await fetch(url, {
-    headers: {
-      Upgrade: "websocket",
-      Pragma: "no-cache",
-      "Cache-Control": "no-cache",
-      Origin: "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold",
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.2849.68",
-      "Accept-Language": "en-US,en;q=0.9",
-    },
-  });
-  const ws = resp.webSocket;
-  if (!ws) throw new Error("sem websocket (" + resp.status + ")");
-  ws.accept();
-
-  const chunks = [];
-  const ts = edgeTimestamp();
-
-  await new Promise((resolve, reject) => {
-    const to = setTimeout(() => reject(new Error("timeout")), 20000);
-    ws.addEventListener("message", (ev) => {
-      const d = ev.data;
-      if (typeof d === "string") {
-        if (d.includes("Path:turn.end")) {
-          clearTimeout(to);
-          try { ws.close(); } catch (e) { /* ignore */ }
-          resolve();
-        }
-        return;
-      }
-      const u8 = new Uint8Array(d);
-      if (u8.length < 3) return;
-      const headerLen = (u8[0] << 8) | u8[1];
-      const start = 2 + headerLen;
-      if (start >= u8.length) return;
-      const header = new TextDecoder().decode(u8.slice(2, start));
-      if (header.includes("Path:audio")) chunks.push(u8.slice(start));
-    });
-    ws.addEventListener("close", () => { clearTimeout(to); resolve(); });
-
-    const cfg = {
-      context: {
-        synthesis: {
-          audio: {
-            metadataoptions: { sentenceBoundaryEnabled: false, wordBoundaryEnabled: false },
-            outputFormat: TTS_FORMAT,
-          },
-        },
+async function googleTts(texto) {
+  const partes = dividir(texto, 190);
+  const pedacos = [];
+  for (const p of partes) {
+    const u =
+      "https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=pt-BR&q=" +
+      encodeURIComponent(p);
+    const r = await fetch(u, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+        Referer: "https://translate.google.com/",
       },
-    };
-    ws.send(
-      `X-Timestamp:${ts}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n${JSON.stringify(cfg)}`
-    );
-    const ssml =
-      `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='pt-BR'>` +
-      `<voice name='${TTS_VOICE}'><prosody pitch='-2Hz' rate='+6%' volume='+0%'>` +
-      `${escapeXml(texto)}</prosody></voice></speak>`;
-    ws.send(
-      `X-RequestId:${crypto.randomUUID().replace(/-/g, "")}\r\nContent-Type:application/ssml+xml\r\n` +
-        `X-Timestamp:${ts}\r\nPath:ssml\r\n\r\n${ssml}`
-    );
-  });
-
+    });
+    if (!r.ok) throw new Error("google tts " + r.status);
+    pedacos.push(new Uint8Array(await r.arrayBuffer()));
+  }
   let total = 0;
-  for (const c of chunks) total += c.length;
+  for (const c of pedacos) total += c.length;
   const out = new Uint8Array(total);
   let off = 0;
-  for (const c of chunks) { out.set(c, off); off += c.length; }
+  for (const c of pedacos) { out.set(c, off); off += c.length; }
   return out;
 }
 
-async function sha256Upper(str) {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
-  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("").toUpperCase();
-}
-
-function edgeTimestamp() {
-  const d = new Date();
-  const dias = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const meses = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  const p = (n) => String(n).padStart(2, "0");
-  return `${dias[d.getUTCDay()]} ${meses[d.getUTCMonth()]} ${p(d.getUTCDate())} ${d.getUTCFullYear()} ` +
-    `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())} GMT+0000 (Coordinated Universal Time)`;
-}
-
-function escapeXml(s) {
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
+function dividir(texto, max) {
+  const palavras = texto.split(/\s+/);
+  const partes = [];
+  let atual = "";
+  for (const p of palavras) {
+    if ((atual + " " + p).trim().length > max) {
+      if (atual) partes.push(atual.trim());
+      atual = p;
+    } else {
+      atual = (atual + " " + p).trim();
+    }
+  }
+  if (atual) partes.push(atual.trim());
+  return partes.length ? partes : [texto];
 }
 
 /* --------------------------- rotas com token (opcional) --------------------------- */
