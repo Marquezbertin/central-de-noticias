@@ -1,5 +1,5 @@
 /* Service Worker — Central de Notícias (PWA) */
-const CACHE = "noticias-v2";
+const CACHE = "noticias-v3";
 const SHELL = [
   "./",
   "./index.html",
@@ -30,6 +30,9 @@ self.addEventListener("fetch", (e) => {
   const req = e.request;
   if (req.method !== "GET") return;
   const url = new URL(req.url);
+
+  // Pedidos para o Worker (outra origem): sempre direto da rede
+  if (url.origin !== self.location.origin) return;
 
   // Áudio: sempre da rede (arquivos grandes / atualizados)
   if (url.pathname.endsWith(".mp3")) return;

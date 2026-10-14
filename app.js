@@ -59,6 +59,9 @@ const itemAudio = new Audio();
 itemAudio.preload = "metadata";
 let activePlayer = null;
 let fallbackAtivo = false;
+let audioRemoto = null;
+let resolverFala = null;
+let tocandoRapido = false;
 
 function updMediaSession(it) {
   if (!("mediaSession" in navigator)) return;
@@ -88,8 +91,11 @@ function pausarBoletim() { if (!boletim.paused) boletim.pause(); }
 function pausarItem() { if (!itemAudio.paused) itemAudio.pause(); }
 
 function pararTudo() {
+  tocandoRapido = false;
   boletim.pause();
   itemAudio.pause();
+  if (audioRemoto) { try { audioRemoto.pause(); } catch (e) { /* ignora */ } audioRemoto = null; }
+  if (resolverFala) { const r = resolverFala; resolverFala = null; r(); }
   fallbackAtivo = false;
   if ("speechSynthesis" in window) window.speechSynthesis.cancel();
 }
@@ -374,7 +380,7 @@ $("#q").addEventListener("input", (e) => {
 
 $("#refresh").addEventListener("click", carregar);
 
-/* ---------------------- atualizar agora (botão) ---------------------- */
+/* --------------- atualizar agora (ao vivo): busca e toca --------------- */
 
 const btnForcar = $("#forcar");
 if (WORKER && btnForcar) {
@@ -385,56 +391,90 @@ if (WORKER && btnForcar) {
 async function atualizarAgora() {
   const btn = $("#forcar");
   btn.disabled = true;
-  const antes = state.geradoEm;
-  $("#status").textContent = "Pedindo atualização…";
+  pararTudo();
+  $("#status").textContent = "Buscando as notícias mais recentes…";
   try {
-    const r = await fetch(WORKER + "/atualizar", { method: "POST" });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || !j.ok) {
-      if (r.status === 429) {
-        const s = Number(j.faltam) || 60;
-        $("#status").textContent = `Aguarde ~${Math.ceil(s / 60)} min para atualizar de novo.`;
-      } else {
-        $("#status").textContent = "Não foi possível pedir a atualização agora.";
-      }
-      btn.disabled = false;
-      return;
-    }
+    const r = await fetch(WORKER + "/rapido?n=25", { cache: "no-store" });
+    const j = await r.json();
+    if (!r.ok || !j.ok || !j.itens || !j.itens.length) throw new Error("sem itens");
+
+    const novos = j.itens.map((i) => ({ ...i, date: j.atualizadoEm, real: !!i.summary }));
+    state.itens = novos;
+    state.categorias = [...new Set(novos.map((i) => i.cat))];
+    state.filtro = "Todas";
+    state.busca = "";
+    $("#q").value = "";
+
+    renderStats();
+    renderTabs();
+    render();
+    $("#updated").textContent = dataGerado(j.atualizadoEm);
+    $("#status").textContent = `${novos.length} notícias novas. Tocando o boletim ao vivo…`;
+    tocarRapido(novos);
   } catch (e) {
-    $("#status").textContent = "Falha de conexão ao pedir a atualização.";
+    $("#status").textContent = "Não foi possível buscar notícias novas agora. Tente de novo.";
+  } finally {
     btn.disabled = false;
-    return;
   }
-  esperarAtualizacao(antes, btn);
 }
 
-async function esperarAtualizacao(antes, btn) {
-  const inicio = Date.now();
-  const limite = inicio + 12 * 60 * 1000; // até 12 min
-  const tick = async () => {
-    const seg = Math.round((Date.now() - inicio) / 1000);
-    $("#status").textContent = `Buscando notícias novas… (${seg}s)`;
-    try {
-      const res = await fetch("noticias.json?t=" + Date.now(), { cache: "no-store" });
-      const dados = await res.json();
-      if (dados.geradoEm && dados.geradoEm !== antes) {
-        await carregar();
-        $("#status").textContent = "Prontas! Tocando o boletim…";
-        btn.disabled = false;
-        boletim.play().catch(() => {
-          $("#status").textContent = "Notícias atualizadas. Toque em ▶ para ouvir.";
-        });
-        return;
-      }
-    } catch (e) { /* tenta de novo */ }
-    if (Date.now() > limite) {
-      $("#status").textContent = "A atualização está demorando; tente novamente em instantes.";
-      btn.disabled = false;
-      return;
-    }
-    setTimeout(tick, 20000);
-  };
-  tick();
+async function tocarRapido(itens) {
+  pararTudo();
+  tocandoRapido = true;
+  for (const it of itens) {
+    if (!tocandoRapido) break;
+    const texto = `${it.title}. ${it.summary || ""}`;
+    $("#status").textContent = `Tocando: ${it.source} — ${it.title}`;
+    await falarRemoto(texto);
+  }
+  tocandoRapido = false;
+  $("#status").textContent = "Fim do boletim ao vivo.";
+}
+
+async function falarRemoto(texto) {
+  if (!WORKER) return falarTextoLocal(texto);
+  try {
+    const r = await fetch(WORKER + "/fala", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: texto }),
+    });
+    if (!r.ok) throw new Error("fala " + r.status);
+    const url = URL.createObjectURL(await r.blob());
+    await new Promise((resolve) => {
+      const a = new Audio(url);
+      audioRemoto = a;
+      a.playbackRate = Number($("#b-rate").value) || 1;
+      const fim = () => {
+        URL.revokeObjectURL(url);
+        if (audioRemoto === a) audioRemoto = null;
+        if (resolverFala === fim) resolverFala = null;
+        resolve();
+      };
+      resolverFala = fim;
+      a.onended = fim;
+      a.onerror = fim;
+      a.play().catch(fim);
+    });
+  } catch (e) {
+    await falarTextoLocal(texto);
+  }
+}
+
+function falarTextoLocal(texto) {
+  return new Promise((resolve) => {
+    if (!("speechSynthesis" in window)) return resolve();
+    const u = new SpeechSynthesisUtterance(texto);
+    const vs = window.speechSynthesis.getVoices();
+    const pt = vs.find((v) => /pt-BR|pt_BR/i.test(v.lang)) || vs.find((v) => /^pt/i.test(v.lang));
+    if (pt) u.voice = pt;
+    u.lang = (pt && pt.lang) || "pt-BR";
+    u.rate = 1.05;
+    u.onend = resolve;
+    u.onerror = resolve;
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(u);
+  });
 }
 
 /* ------------------------------ init ------------------------------ */
