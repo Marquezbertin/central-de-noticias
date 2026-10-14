@@ -477,6 +477,10 @@ function falarTextoLocal(texto) {
 /* ------------------------------ init ------------------------------ */
 
 $("#hoje").textContent = hojeExtenso();
+const coverDate = $("#cover-date");
+if (coverDate) {
+  coverDate.textContent = new Date().toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" });
+}
 if ("speechSynthesis" in window) window.speechSynthesis.onvoiceschanged = () => {};
 carregar();
 

@@ -1,5 +1,5 @@
 /* Service Worker — Central de Notícias (PWA) */
-const CACHE = "noticias-v4";
+const CACHE = "noticias-v5";
 const SHELL = [
   "./",
   "./index.html",
