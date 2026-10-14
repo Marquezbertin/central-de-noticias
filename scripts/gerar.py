@@ -785,13 +785,17 @@ def main():
     print(f"    notícias narradas: {narradas}")
 
     print("5/5 Gerando áudio neural e montando…")
-    if FFMPEG:
-        asyncio.run(gerar_audios(selecionados, segs))
-        montar_boletim(segs)
-    else:
-        # fallback: boletim em uma única narração (sem pausas/vinheta)
-        texto = " ".join(s["texto"] for s in segs if s["tipo"] == "fala")
-        asyncio.run(_fallback(selecionados, texto))
+    try:
+        if FFMPEG:
+            asyncio.run(gerar_audios(selecionados, segs))
+            montar_boletim(segs)
+        else:
+            # fallback: boletim em uma única narração (sem pausas/vinheta)
+            texto = " ".join(s["texto"] for s in segs if s["tipo"] == "fala")
+            asyncio.run(_fallback(selecionados, texto))
+    except Exception as ex:
+        # mesmo sem áudio, publica as notícias do dia
+        print("    aviso: falha ao gerar áudio; publicando só o texto:", ex)
 
     for it in selecionados:
         it.pop("rss", None)

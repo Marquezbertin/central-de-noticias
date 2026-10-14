@@ -27,13 +27,15 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Buscar, resumir e narrar as notícias
-        run: python scripts/gerar.py
+        run: python scripts/gerar.py || (echo "Primeira tentativa falhou; tentando novamente..." && python scripts/gerar.py)
 
       - name: Publicar alterações
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add noticias.json resumo.mp3 resumo.txt audio
+          git add noticias.json resumo.txt
+          [ -f resumo.mp3 ] && git add resumo.mp3 || true
+          [ -d audio ] && git add audio || true
           if git diff --cached --quiet; then
             echo "Sem alterações."
           else
