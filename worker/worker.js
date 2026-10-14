@@ -205,8 +205,13 @@ async function fala(request, cors) {
   let texto = "";
   try {
     if (request.method === "POST") {
-      const j = await request.json();
-      texto = j && j.text ? String(j.text) : "";
+      const raw = await request.text();
+      try {
+        const j = JSON.parse(raw);
+        texto = j && j.text ? String(j.text) : raw;
+      } catch (e) {
+        texto = raw;
+      }
     } else {
       texto = new URL(request.url).searchParams.get("text") || "";
     }
@@ -234,39 +239,30 @@ async function edgeTts(texto) {
   const gec = await sha256Upper(strToHash);
   const conn = crypto.randomUUID().replace(/-/g, "");
   const url =
-    `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1` +
+    `https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1` +
     `?TrustedClientToken=${TTS_TOKEN}&Sec-MS-GEC=${gec}` +
     `&Sec-MS-GEC-Version=1-130.0.2849.68&ConnectionId=${conn}`;
 
-  const ws = new WebSocket(url);
+  const resp = await fetch(url, {
+    headers: {
+      Upgrade: "websocket",
+      Pragma: "no-cache",
+      "Cache-Control": "no-cache",
+      Origin: "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold",
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.2849.68",
+      "Accept-Language": "en-US,en;q=0.9",
+    },
+  });
+  const ws = resp.webSocket;
+  if (!ws) throw new Error("sem websocket (" + resp.status + ")");
+  ws.accept();
+
   const chunks = [];
   const ts = edgeTimestamp();
 
   await new Promise((resolve, reject) => {
     const to = setTimeout(() => reject(new Error("timeout")), 20000);
-    ws.addEventListener("open", () => {
-      const cfg = {
-        context: {
-          synthesis: {
-            audio: {
-              metadataoptions: { sentenceBoundaryEnabled: false, wordBoundaryEnabled: false },
-              outputFormat: TTS_FORMAT,
-            },
-          },
-        },
-      };
-      ws.send(
-        `X-Timestamp:${ts}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n${JSON.stringify(cfg)}`
-      );
-      const ssml =
-        `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='pt-BR'>` +
-        `<voice name='${TTS_VOICE}'><prosody pitch='-2Hz' rate='+6%' volume='+0%'>` +
-        `${escapeXml(texto)}</prosody></voice></speak>`;
-      ws.send(
-        `X-RequestId:${crypto.randomUUID().replace(/-/g, "")}\r\nContent-Type:application/ssml+xml\r\n` +
-          `X-Timestamp:${ts}\r\nPath:ssml\r\n\r\n${ssml}`
-      );
-    });
     ws.addEventListener("message", (ev) => {
       const d = ev.data;
       if (typeof d === "string") {
@@ -285,8 +281,29 @@ async function edgeTts(texto) {
       const header = new TextDecoder().decode(u8.slice(2, start));
       if (header.includes("Path:audio")) chunks.push(u8.slice(start));
     });
-    ws.addEventListener("error", () => { clearTimeout(to); reject(new Error("ws error")); });
     ws.addEventListener("close", () => { clearTimeout(to); resolve(); });
+
+    const cfg = {
+      context: {
+        synthesis: {
+          audio: {
+            metadataoptions: { sentenceBoundaryEnabled: false, wordBoundaryEnabled: false },
+            outputFormat: TTS_FORMAT,
+          },
+        },
+      },
+    };
+    ws.send(
+      `X-Timestamp:${ts}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n${JSON.stringify(cfg)}`
+    );
+    const ssml =
+      `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='pt-BR'>` +
+      `<voice name='${TTS_VOICE}'><prosody pitch='-2Hz' rate='+6%' volume='+0%'>` +
+      `${escapeXml(texto)}</prosody></voice></speak>`;
+    ws.send(
+      `X-RequestId:${crypto.randomUUID().replace(/-/g, "")}\r\nContent-Type:application/ssml+xml\r\n` +
+        `X-Timestamp:${ts}\r\nPath:ssml\r\n\r\n${ssml}`
+    );
   });
 
   let total = 0;
