@@ -1,0 +1,58 @@
+﻿name: Monitoramento - Atualização diária
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  monitorar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verificar se notícias estão atualizadas
+        run: |
+          if [ ! -f noticias.json ]; then
+            echo 'noticias.json não encontrado'
+            exit 1
+          fi
+          GERADO=
+          if [ \"\\" = \"ERR\" ] || [ -z \"\\" ]; then
+            echo 'Erro ao ler data de geração'
+            exit 1
+          fi
+          echo \"Última geração: \\"
+          HOJE=2026-10-15
+          if echo \"\\" | grep -q \"\\"; then
+            echo 'OK: Notícias atualizadas hoje'
+            exit 0
+          else
+            echo 'FALHA: Notícias não foram geradas hoje'
+            exit 1
+          fi
+      - name: Disparar atualização em caso de falha
+        if: failure() && github.event_name == 'schedule'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'update-news.yml',
+              ref: 'main'
+            });
+      - name: Criar issue em caso de falha
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = 'Alerta: Atualização diária parou';
+            const body = O monitoramento detectou que  as notícias não estão atualizadas.;
+            const { data: issues } = await github.rest.issues.listForRepo({...context.repo, state: 'open', labels: 'alerta-atualizacao'});
+            if (issues.length === 0) {
+              await github.rest.issues.create({ ...context.repo, title, body, labels: ['alerta-atualizacao'] });
+            }

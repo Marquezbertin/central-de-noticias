@@ -73,8 +73,8 @@ PAUSA_ITEM = float(os.environ.get("PAUSA_ITEM", "2.2"))      # entre notícias
 MUSICA_A_CADA = int(os.environ.get("MUSICA_A_CADA", "5"))    # vinheta a cada N notícias
 MUSICA_DUR = float(os.environ.get("MUSICA_DUR", "7.0"))      # duração da vinheta
 MUSIC_DIR = os.environ.get("MUSIC_DIR", "music")            # músicas próprias (opcional)
-TIMEOUT = 20
-UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+TIMEOUT = int(os.environ.get("TIMEOUT", "20"))
+UA = os.environ.get("UA", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36")
 
 GN = "https://news.google.com/rss/search?q={}&hl=pt-BR&gl=BR&ceid=BR:pt-419"
 
@@ -691,7 +691,7 @@ async def falar(texto, destino, sem):
         for tentativa in range(3):
             try:
                 c = edge_tts.Communicate(texto, VOZ, rate=RATE, pitch=PITCH)
-                await c.save(destino)
+                await asyncio.wait_for(c.save(destino), timeout=120)
                 if os.path.getsize(destino) > 800:
                     return True
             except Exception as ex:
@@ -749,6 +749,7 @@ def montar_boletim(segs):
         elif s["tipo"] == "musica" and mi < len(musicas):
             partes.append(musicas[mi]); mi += 1
     if not partes:
+        # fallback: ao menos gera o texto se não conseguiu áudio; mas não concatena
         raise RuntimeError("Nada para concatenar no boletim.")
     concat("resumo.mp3", partes)
 
