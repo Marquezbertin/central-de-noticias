@@ -1,8 +1,8 @@
-﻿name: Monitoramento - Atualização diária
+name: Monitoramento - Atualiza??o di?ria
 
 on:
   schedule:
-    - cron: '0 */6 * * *'
+    - cron: "0 */6 * * *"
   workflow_dispatch:
 
 permissions:
@@ -14,45 +14,64 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Verificar se notícias estão atualizadas
+      - name: Verificar se not?cias est?o atualizadas
         run: |
           if [ ! -f noticias.json ]; then
-            echo 'noticias.json não encontrado'
+            echo "noticias.json n?o encontrado"
             exit 1
           fi
-          GERADO=
-          if [ \"\\" = \"ERR\" ] || [ -z \"\\" ]; then
-            echo 'Erro ao ler data de geração'
+          GERADO=$(python3 -c "
+import json
+try:
+  with open(\"noticias.json\", \"r\", encoding=\"utf-8\") as f:
+    d = json.load(f)
+  print(d.get(\"geradoEm\", \"\"))
+except Exception:
+  print(\"ERR\")
+")
+          if [ "$GERADO" = "ERR" ] || [ -z "$GERADO" ]; then
+            echo "Erro ao ler data de gera??o"
             exit 1
           fi
-          echo \"Última geração: \\"
-          HOJE=2026-10-15
-          if echo \"\\" | grep -q \"\\"; then
-            echo 'OK: Notícias atualizadas hoje'
+          echo "?ltima gera??o: $GERADO"
+          HOJE=$(date -u +%Y-%m-%d)
+          if echo "$GERADO" | grep -q "$HOJE"; then
+            echo "OK: Not?cias atualizadas hoje"
             exit 0
           else
-            echo 'FALHA: Notícias não foram geradas hoje'
+            echo "FALHA: Not?cias n?o foram geradas hoje"
             exit 1
           fi
-      - name: Disparar atualização em caso de falha
-        if: failure() && github.event_name == 'schedule'
+      - name: Disparar atualiza??o em caso de falha
+        if: failure() && github.event_name == "schedule"
         uses: actions/github-script@v7
         with:
           script: |
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'update-news.yml',
-              ref: 'main'
+              workflow_id: "update-news.yml",
+              ref: "main"
             });
+      - name: Alerta no Telegram (falha)
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+            MSG="*Alerta: Central de Not?cias*%0AAtualiza??o di?ria N?O est? atualizada.%0AReposit?rio: $GITHUB_REPOSITORY%0ATentando disparar atualiza??o..."
+            curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" -d chat_id="$TELEGRAM_CHAT_ID" -d text="$MSG" -d parse_mode=Markdown > /dev/null
+          fi
       - name: Criar issue em caso de falha
         if: failure()
         uses: actions/github-script@v7
         with:
           script: |
-            const title = 'Alerta: Atualização diária parou';
-            const body = O monitoramento detectou que  as notícias não estão atualizadas.;
-            const { data: issues } = await github.rest.issues.listForRepo({...context.repo, state: 'open', labels: 'alerta-atualizacao'});
+            const title = "Alerta: Atualiza??o di?ria parou";
+            const body = "O monitoramento detectou que " + new Date().toISOString() + " as not?cias n?o est?o atualizadas.";
+            const { data: issues } = await github.rest.issues.listForRepo({...context.repo, state: "open", labels: "alerta-atualizacao"});
             if (issues.length === 0) {
-              await github.rest.issues.create({ ...context.repo, title, body, labels: ['alerta-atualizacao'] });
+              await github.rest.issues.create({ ...context.repo, title, body, labels: ["alerta-atualizacao"] });
             }
+
