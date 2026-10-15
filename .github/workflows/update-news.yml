@@ -2,7 +2,9 @@ name: Atualizar notícias
 
 on:
   schedule:
-    - cron: "0 9 * * *"   # todos os dias às 09:00 UTC (06:00 de Brasília)
+    # Minutos fora do topo da hora: o GitHub derruba/atrasa jobs agendados no :00.
+    - cron: "23 9 * * *"   # 09:23 UTC (06:23 de Brasília)
+    - cron: "47 10 * * *"  # 10:47 UTC (07:47 de Brasília) — reforço, caso o primeiro seja derrubado
   workflow_dispatch:
 
 permissions:
@@ -18,15 +20,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Já atualizado hoje?
+        id: guard
+        # Só pula no agendamento (reforço) se as notícias de hoje já existirem.
+        # O acionamento manual ("Atualizar agora") sempre roda.
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ] && grep -q "\"geradoEm\": \"$(date -u +%Y-%m-%d)" noticias.json; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/setup-python@v5
+        if: steps.guard.outputs.skip != 'true'
         with:
           python-version: "3.12"
           cache: pip
 
       - name: Instalar dependências
+        if: steps.guard.outputs.skip != 'true'
         run: pip install -r requirements.txt
 
       - name: Buscar, resumir e narrar as notícias
+        if: steps.guard.outputs.skip != 'true'
         run: python scripts/gerar.py || (echo "Primeira tentativa falhou; tentando novamente..." && python scripts/gerar.py)
 
       - name: Publicar alterações
