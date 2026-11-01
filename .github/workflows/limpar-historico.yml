@@ -1,0 +1,38 @@
+name: Limpar histórico
+
+# Roda no dia 1º de cada mês (03:00 UTC = 00:00 de Brasília).
+# Para rodar também no dia 15, troque por: "0 3 1,15 * *"
+on:
+  schedule:
+    - cron: "0 3 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Mesmo grupo do workflow de notícias: garante que um não empurra por cima do outro.
+concurrency:
+  group: atualizar-noticias
+  cancel-in-progress: false
+
+jobs:
+  limpar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reescrever histórico em um único commit (squash)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Cria um commit "órfão" (sem pai) contendo exatamente os arquivos atuais.
+          git checkout --orphan _limpo
+          git add -A
+          git commit -m "chore: limpeza mensal do histórico ($(date -u +%Y-%m))"
+
+          # Substitui a main por esse commit único e força o envio.
+          git branch -M _limpo main
+          git push --force origin main

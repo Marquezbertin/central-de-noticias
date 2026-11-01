@@ -1,0 +1,7 @@
+# Configuração do Worker no Cloudflare (Workers Builds / Git).
+# Diz ao Cloudflare que o Worker é exatamente worker/worker.js
+# (e não um projeto Python, apesar do requirements.txt do site).
+
+name = "central-de-noticias"
+main = "worker/worker.js"
+compatibility_date = "2025-01-01"
